@@ -1,3 +1,4 @@
+// SensorRecorderService.kt
 package com.example.sensor_recorder
 
 import android.app.Notification
@@ -16,8 +17,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
-import android.util.Log
 import androidx.core.app.NotificationCompat
+import timber.log.Timber
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -56,6 +57,12 @@ class SensorRecorderService : Service(), SensorEventListener {
     private var recordingStartEpochMs: Long = 0
     private var epochOffsetNs: Long = 0
 
+    // Bluetooth sync properties - to be set externally by BluetoothSyncService
+    var btClockOffsetNs: Long? = null
+    var btClockOffsetStdDevNs: Long? = null
+    var btClockOffsetSamples: Int? = null
+    var btPeerDevice: String? = null
+
     // Rate tracking
     private val accelIntervals = CircularBuffer(50)
     private val gyroIntervals = CircularBuffer(50)
@@ -77,19 +84,22 @@ class SensorRecorderService : Service(), SensorEventListener {
     override fun onBind(intent: Intent): IBinder { return binder }
     override fun onCreate() {
         super.onCreate()
+        Timber.i("SensorRecorderService created")
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-        
+        Timber.d("Sensors found — accel=${accelerometer?.name}, gyro=${gyroscope?.name}")
+
         // Register listeners immediately for preview
         accelerometer?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST) }
         gyroscope?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST) }
-        
+
         createNotificationChannel()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        Timber.i("SensorRecorderService destroyed")
         sensorManager.unregisterListener(this)
     }
 
@@ -103,28 +113,37 @@ class SensorRecorderService : Service(), SensorEventListener {
     }
     fun startRecording() {
         if (isRecording.get()) return
+        Timber.i("Starting recording")
         startForeground(NOTIFICATION_ID, createNotification())
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SensorRecorder::WakeLock")
         wakeLock?.acquire(4 * 60 * 60 * 1000L)
+        Timber.d("Wake lock acquired")
         setupRecordingFiles()
-        
+
         // Reset counters and buffers
         sampleCountAccel = 0
         sampleCountGyro = 0
         accelIntervals.clear()
         gyroIntervals.clear()
-        
+
         startTimeNs = SystemClock.elapsedRealtimeNanos()
         recordingStartEpochMs = System.currentTimeMillis()
         epochOffsetNs = recordingStartEpochMs * 1_000_000L - startTimeNs
         isRecording.set(true)
+        Timber.i("Recording started, dir=${recordingDir?.name}, epochOffsetNs=$epochOffsetNs")
         startFileFlusher()
     }
     fun stopRecording() {
         if (!isRecording.get()) return
+        Timber.i("Stopping recording")
         isRecording.set(false)
-        try { wakeLock?.release() } catch (e: Exception) { Log.e(TAG, "Error releasing wakelock", e) }
+        try {
+            wakeLock?.release()
+            Timber.d("Wake lock released")
+        } catch (e: Exception) {
+            Timber.e(e, "Error releasing wakelock")
+        }
         stopForeground(STOP_FOREGROUND_REMOVE)
         serviceScope.launch {
             flushBuffers()
@@ -136,6 +155,7 @@ class SensorRecorderService : Service(), SensorEventListener {
         if (!isRecording.get()) return
         val timestamp = SystemClock.elapsedRealtimeNanos()
         annotationBuffer.add("$timestamp,sync_tap")
+        Timber.d("Sync tap logged at $timestamp")
     }
     private fun setupRecordingFiles() {
         val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
@@ -167,12 +187,28 @@ class SensorRecorderService : Service(), SensorEventListener {
                 var line = buffer.poll()
                 while (line != null) { writer.write(line); writer.newLine(); line = buffer.poll() }
             }
-        } catch (e: Exception) { Log.e(TAG, "Error writing to file: ${e.message}") }
+        } catch (e: Exception) { Timber.e(e, "Error writing to file: ${file.name}") }
     }
     private fun writeMetadata() {
         recordingDir?.let {
-            val metadata = """{"recording_start_epoch_ms": $recordingStartEpochMs, "epoch_offset_ns": $epochOffsetNs, "accel_sample_count": $sampleCountAccel, "gyro_sample_count": $sampleCountGyro}"""
-            File(it, "Metadata.json").writeText(metadata)
+            try {
+                val metadataJson = org.json.JSONObject().apply {
+                    put("recording_start_epoch_ms", recordingStartEpochMs)
+                    put("epoch_offset_ns", epochOffsetNs)
+                    put("accel_sample_count", sampleCountAccel)
+                    put("gyro_sample_count", sampleCountGyro)
+
+                    // Add Bluetooth sync data if available
+                    btClockOffsetNs?.let { put("bt_clock_offset_ns", it) }
+                    btClockOffsetStdDevNs?.let { put("bt_offset_std_dev_ns", it) }
+                    btClockOffsetSamples?.let { put("bt_clock_offset_samples", it) }
+                    btPeerDevice?.let { put("bt_peer_device", it) }
+                }
+                File(it, "Metadata.json").writeText(metadataJson.toString(4))
+                Timber.i("Metadata written to ${it.path}")
+            } catch (e: Exception) {
+                Timber.e(e, "Error writing metadata JSON")
+            }
         }
     }
     override fun onSensorChanged(event: SensorEvent?) {
@@ -183,18 +219,20 @@ class SensorRecorderService : Service(), SensorEventListener {
         val z = event.values[2]
         val line = "$timestamp,$x,$y,$z"
         if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
+            if (lastAccelTimestamp == 0L) Timber.d("First accel event received")
             if (lastAccelTimestamp != 0L) {
                 accelIntervals.add(timestamp - lastAccelTimestamp)
             }
             lastAccelValues = event.values.clone()
             lastAccelTimestamp = timestamp
-            
+
             if (isRecording.get()) {
                 accelBuffer.add(line)
                 sampleCountAccel++
             }
         } else if (event.sensor.type == Sensor.TYPE_GYROSCOPE) {
-             if (lastGyroTimestamp != 0L) {
+            if (lastGyroTimestamp == 0L) Timber.d("First gyro event received")
+            if (lastGyroTimestamp != 0L) {
                 gyroIntervals.add(timestamp - lastGyroTimestamp)
             }
             lastGyroValues = event.values.clone()
@@ -261,7 +299,6 @@ class SensorRecorderService : Service(), SensorEventListener {
     }
 
     companion object {
-        const val TAG = "SensorRecorderService"
         const val CHANNEL_ID = "SensorRecorderChannel"
         const val NOTIFICATION_ID = 1
         const val ACTION_START = "ACTION_START"
