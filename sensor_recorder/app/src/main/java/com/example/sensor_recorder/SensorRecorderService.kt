@@ -58,10 +58,7 @@ class SensorRecorderService : Service(), SensorEventListener {
     private var epochOffsetNs: Long = 0
 
     // Bluetooth sync properties - to be set externally by BluetoothSyncService
-    var btClockOffsetNs: Long? = null
-    var btClockOffsetStdDevNs: Long? = null
-    var btClockOffsetSamples: Int? = null
-    var btPeerDevice: String? = null
+    val btClockOffsets = java.util.concurrent.ConcurrentHashMap<String, com.example.sensor_recorder.sync.ClockOffsetEstimator.Result>()
 
     // Rate tracking
     private val accelIntervals = CircularBuffer(50)
@@ -121,11 +118,12 @@ class SensorRecorderService : Service(), SensorEventListener {
         Timber.d("Wake lock acquired")
         setupRecordingFiles()
 
-        // Reset counters and buffers
+        // Reset counters, buffers, and BT sync metadata
         sampleCountAccel = 0
         sampleCountGyro = 0
         accelIntervals.clear()
         gyroIntervals.clear()
+        btClockOffsets.clear()
 
         startTimeNs = SystemClock.elapsedRealtimeNanos()
         recordingStartEpochMs = System.currentTimeMillis()
@@ -199,10 +197,17 @@ class SensorRecorderService : Service(), SensorEventListener {
                     put("gyro_sample_count", sampleCountGyro)
 
                     // Add Bluetooth sync data if available
-                    btClockOffsetNs?.let { put("bt_clock_offset_ns", it) }
-                    btClockOffsetStdDevNs?.let { put("bt_offset_std_dev_ns", it) }
-                    btClockOffsetSamples?.let { put("bt_clock_offset_samples", it) }
-                    btPeerDevice?.let { put("bt_peer_device", it) }
+                    if (btClockOffsets.isNotEmpty()) {
+                        val offsetsJson = org.json.JSONObject()
+                        for ((peer, result) in btClockOffsets) {
+                            offsetsJson.put(peer, org.json.JSONObject().apply {
+                                put("offset_ns", result.offsetNs)
+                                put("std_dev_ns", result.stdDevNs)
+                                put("sample_count", result.sampleCount)
+                            })
+                        }
+                        put("bt_clock_offsets", offsetsJson)
+                    }
                 }
                 File(it, "Metadata.json").writeText(metadataJson.toString(4))
                 Timber.i("Metadata written to ${it.path}")
