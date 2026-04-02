@@ -89,3 +89,8 @@ The `timestamp_ns` field uses `event.timestamp` (nanoseconds since boot, monoton
 - Min SDK 29 (Android 10)
 - Target SDK 36 (Android 15)
 - Permissions: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS`, `HIGH_SAMPLING_RATE_SENSORS`, `WAKE_LOCK`
+
+## Docs
+
+- `docs/issues/` — known bugs, debug notes, Bluetooth error log
+- `docs/plans/` — implementation plans for dev agents (multi-device, UI flow)

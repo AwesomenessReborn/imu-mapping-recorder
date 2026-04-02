@@ -1,10 +1,11 @@
+// ExportUtils.kt
 package com.example.sensor_recorder
 
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.util.Log
 import androidx.core.content.FileProvider
+import timber.log.Timber
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -12,7 +13,6 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 object ExportUtils {
-    private const val TAG = "ExportUtils"
 
     /**
      * Creates a ZIP file from the recording directory
@@ -42,10 +42,10 @@ object ExportUtils {
                 }
             }
 
-            Log.d(TAG, "Created ZIP: ${zipFile.absolutePath}")
+            Timber.d("Created ZIP: ${zipFile.absolutePath}")
             zipFile
         } catch (e: Exception) {
-            Log.e(TAG, "Error creating ZIP file", e)
+            Timber.e(e, "Error creating ZIP file")
             null
         }
     }
@@ -57,7 +57,7 @@ object ExportUtils {
         return try {
             val zipFile = zipRecordingDirectory(context, recordingDir)
             if (zipFile == null) {
-                Log.e(TAG, "Failed to create ZIP file")
+                Timber.e("Failed to create ZIP file")
                 return false
             }
 
@@ -76,10 +76,10 @@ object ExportUtils {
             }
 
             context.startActivity(Intent.createChooser(shareIntent, "Export Recording"))
-            Log.d(TAG, "Share sheet opened successfully")
+            Timber.d("Share sheet opened successfully")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Error sharing recording", e)
+            Timber.e(e, "Error sharing recording")
             false
         }
     }
@@ -91,7 +91,7 @@ object ExportUtils {
         return try {
             val zipFile = zipRecordingDirectory(context, recordingDir)
             if (zipFile == null) {
-                Log.e(TAG, "Failed to create ZIP file")
+                Timber.e("Failed to create ZIP file")
                 return null
             }
 
@@ -101,7 +101,7 @@ object ExportUtils {
                 zipFile
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Error getting recording URI", e)
+            Timber.e(e, "Error getting recording URI")
             null
         }
     }
@@ -115,11 +115,11 @@ object ExportUtils {
             cacheDir.listFiles()?.forEach { file ->
                 if (file.name.endsWith(".zip")) {
                     val deleted = file.delete()
-                    Log.d(TAG, "Deleted old ZIP: ${file.name}, success: $deleted")
+                    Timber.d("Deleted old ZIP: ${file.name}, success: $deleted")
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error cleaning up old ZIPs", e)
+            Timber.e(e, "Error cleaning up old ZIPs")
         }
     }
 }
