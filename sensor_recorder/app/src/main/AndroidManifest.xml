@@ -16,7 +16,13 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <!-- Android 12+ -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <!-- neverForLocation: BLE scan is used for device connection only, not location.
+         Without this flag, Android 12+ silently suppresses all scan results unless
+         ACCESS_FINE_LOCATION is also granted. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
 
     <application
         android:name=".SensorRecorderApp"

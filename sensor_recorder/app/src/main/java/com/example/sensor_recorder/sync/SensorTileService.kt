@@ -96,7 +96,10 @@ class SensorTileService : Service() {
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val name = try { result.device.name } catch (_: Exception) { null }
+            // With neverForLocation, read name from the advertisement scan record directly.
+            // result.device.name reads from the OS BT cache which may be null for unpaired devices.
+            val name = result.scanRecord?.deviceName
+                ?: try { result.device.name } catch (_: Exception) { null }
             // Log every named device seen so we can identify the real advertisement name
             if (name != null) {
                 Timber.d("BLE SCAN: \"$name\"  addr=${result.device.address}  rssi=${result.rssi}")
