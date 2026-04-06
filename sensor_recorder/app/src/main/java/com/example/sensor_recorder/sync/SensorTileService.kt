@@ -13,7 +13,6 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Intent
@@ -56,8 +55,19 @@ class SensorTileService : Service() {
         private val PNPL_SERVICE_UUID    = UUID.fromString("00000000-0001-11e1-9ab4-0002a5d5c51b")
         private val PNPL_WRITE_CHAR_UUID = UUID.fromString("00000002-0001-11e1-ac8b-0002a5d5c51b")
 
-        private const val DEVICE_NAME      = "SensorTile.box Pro"
-        private const val SCAN_TIMEOUT_MS  = 15_000L
+        // Known BLE advertisement names for SensorTile.box PRO running DATALOG2.
+        // The STBLESensors app shows it as "HSD2v32"; the firmware may also advertise
+        // "SensorTile.box Pro" depending on version. We match any known name.
+        // If your device isn't found, check the "BLE SCAN:" lines in logcat to see
+        // what name it's actually advertising and add it here.
+        private val KNOWN_DEVICE_NAMES = setOf(
+            "SensorTile.box Pro",
+            "HSD2v32",
+            "STEVAL-MKBOXPRO",
+            "SBP"
+        )
+
+        private const val SCAN_TIMEOUT_MS = 15_000L
     }
 
     // ── Binder ────────────────────────────────────────────────────────────────
@@ -86,11 +96,16 @@ class SensorTileService : Service() {
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val name = try { result.device.name } catch (_: Exception) { null } ?: return
-            if (name == DEVICE_NAME) {
-                Timber.i("SensorTile found: ${result.device.address}")
+            val name = try { result.device.name } catch (_: Exception) { null }
+            // Log every named device seen so we can identify the real advertisement name
+            if (name != null) {
+                Timber.d("BLE SCAN: \"$name\"  addr=${result.device.address}  rssi=${result.rssi}")
+            }
+            if (name != null && name in KNOWN_DEVICE_NAMES) {
+                Timber.i("SensorTile matched \"$name\" at ${result.device.address}")
                 stopScan()
                 connectionState = SensorTileConnectionState.CONNECTING
+                connectedDeviceName = name
                 updateNotification()
                 gatt = result.device.connectGatt(
                     this@SensorTileService, false, gattCallback, BluetoothDevice.TRANSPORT_LE
@@ -171,7 +186,7 @@ class SensorTileService : Service() {
             }
 
             pnplChar = char
-            connectedDeviceName = DEVICE_NAME
+            // connectedDeviceName already set in onScanResult when device was found
             // Request higher MTU to accommodate longer PnPL JSON (e.g. sensor config)
             gatt.requestMtu(247)
         }
@@ -265,7 +280,7 @@ class SensorTileService : Service() {
             Timber.d("Scan already in progress")
             return
         }
-        Timber.i("Starting BLE scan for \"$DEVICE_NAME\"")
+        Timber.i("Starting BLE scan for SensorTile.box PRO (names: $KNOWN_DEVICE_NAMES)")
         connectionState = SensorTileConnectionState.SCANNING
         errorMessage = null
         isScanning = true
@@ -274,19 +289,19 @@ class SensorTileService : Service() {
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
-        val filter = ScanFilter.Builder()
-            .setDeviceName(DEVICE_NAME)
-            .build()
-        leScanner.startScan(listOf(filter), settings, scanCallback)
+        // No ScanFilter — OS-level name filtering silently drops devices whose advertisement
+        // name doesn't match exactly. We filter by name in onScanResult instead and log
+        // all named devices so the real advertisement name is visible in logcat.
+        leScanner.startScan(null, settings, scanCallback)
 
         // Auto-stop scan if device not found within timeout
         mainHandler.postDelayed({
             if (isScanning) {
                 stopScan()
                 if (connectionState == SensorTileConnectionState.SCANNING) {
-                    Timber.w("Scan timeout — $DEVICE_NAME not found")
+                    Timber.w("Scan timeout — SensorTile not found (check logcat BLE SCAN: lines for nearby device names)")
                     connectionState = SensorTileConnectionState.ERROR
-                    errorMessage = "Not found — is SensorTile.box Pro powered on?"
+                    errorMessage = "Not found — check logcat for nearby BLE device names"
                     updateNotification()
                 }
             }
