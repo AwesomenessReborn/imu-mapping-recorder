@@ -62,6 +62,44 @@ SensorTile timestamps are reconstructed from sample index × ODR period, anchore
 
 ---
 
+## Sync Tap Procedure
+
+The **sync tap** is the primary alignment anchor between Phone A and the SensorTile.box PRO. Use it at the start and end of every recording session.
+
+### What it does
+
+1. You physically tap the phone and the SensorTile sharply together against a hard surface (table, desk).
+2. This creates a simultaneous, sharp acceleration spike in **both** IMU streams at the same physical moment.
+3. Immediately press **SYNC TAP ⚡** in the app.
+4. The app writes a timestamped annotation entry to `Annotation.csv` with label `sync_tap`.
+
+### Why two steps
+
+The **physical tap** is the precision alignment anchor — the IMU spike is visible in both streams and can be cross-correlated to sub-millisecond accuracy. The **button press** gives you a coarse software timestamp (within ~500ms of the tap) so you know roughly where in the recording to look. In post-processing, you search for the IMU spike within a window around the software timestamp.
+
+### Per-session procedure
+
+1. Press **SYNC TAP ⚡** immediately after pressing **START RECORDING** (pre-recording anchor).
+2. Do the actual recording session (≤10 minutes).
+3. Press **SYNC TAP ⚡** immediately before pressing **STOP RECORDING** (post-recording anchor).
+
+Two anchors per session allow linear drift correction over the full recording window. Expected final alignment accuracy: **<3ms** after drift correction.
+
+### How it appears in output files
+
+**Phone A `Annotation.csv`:**
+```csv
+timestamp_ns,label
+783012345678900,sync_tap   ← pre-recording tap
+983456789012300,sync_tap   ← post-recording tap
+```
+
+**SensorTile SD card:** contains the raw IMU spike(s) at the same physical moments. The alignment pipeline finds these by cross-correlating `sqrt(ax²+ay²+az²)` from both devices — magnitude is rotation-invariant so orientation doesn't matter.
+
+**Post-processing:** see `gait-research/projects/imu-mapping/align_and_verify.py`.
+
+---
+
 ## Implementation Status
 
 | Feature | Status | Location |
@@ -71,7 +109,11 @@ SensorTile timestamps are reconstructed from sample index × ODR period, anchore
 | Clock sync protocol (ping-pong, 10 rounds) | ✅ Done | `sync/ClockOffsetEstimator.kt` |
 | Coordinated start/stop (CMD_START / CMD_STOP + ACK) | ✅ Done | `sync/BluetoothSyncService.kt` |
 | Export via Android share sheet (ZIP) | ✅ Done | `ExportUtils.kt` |
-| SensorTileService — BLE connect + PnPL start/stop | 🔜 Next | `docs/plan-sensortile-ble.md` (Phase 1–3) |
+| Sync tap annotation (button → `Annotation.csv`) | ✅ Done | `SensorRecorderService.kt` |
+| SensorTileService — BLE scan + connect | ✅ Done | `sync/SensorTileService.kt` |
+| SensorTileService — PnPL start/stop (coordinated with START/STOP button) | ✅ Done | `sync/SensorTileService.kt` |
+| SensorTile status card in Controller UI | ✅ Done | `MainActivity.kt` → `SensorTileCard` |
+| SensorTile BLE UUID verification (first run) | ⚠️ Verify | Check Timber logcat for `SERVICE:` / `CHAR:` lines on first connect |
 | SD card fetch + alignment pipeline | 🔜 Separate | `gait-research/projects/imu-mapping/` |
 
 ---

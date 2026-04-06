@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.sp
 import com.example.sensor_recorder.sync.BluetoothSyncService
 import com.example.sensor_recorder.sync.BtConnectionState
 import com.example.sensor_recorder.sync.DeviceRole
+import com.example.sensor_recorder.sync.SensorTileConnectionState
+import com.example.sensor_recorder.sync.SensorTileService
 import com.example.sensor_recorder.sync.SyncReport
 import com.example.sensor_recorder.ui.theme.Sensor_recorderTheme
 import kotlinx.coroutines.delay
@@ -47,8 +49,10 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
     private var sensorService: SensorRecorderService? = null
     private var btSyncService: BluetoothSyncService? = null
+    private var sensorTileService: SensorTileService? = null
     private var isSensorServiceBound = mutableStateOf(false)
     private var isBtSyncServiceBound = mutableStateOf(false)
+    private var isSensorTileServiceBound = mutableStateOf(false)
 
     private val sensorServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(className: ComponentName, binder: IBinder) {
@@ -76,6 +80,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val sensorTileServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(className: ComponentName, binder: IBinder) {
+            sensorTileService = (binder as SensorTileService.LocalBinder).getService()
+            isSensorTileServiceBound.value = true
+            Timber.i("SensorTileService connected")
+        }
+        override fun onServiceDisconnected(arg0: ComponentName) {
+            isSensorTileServiceBound.value = false
+            sensorTileService = null
+            Timber.w("SensorTileService disconnected")
+        }
+    }
+
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -91,6 +108,9 @@ class MainActivity : ComponentActivity() {
         Intent(this, BluetoothSyncService::class.java).also { intent ->
             bindService(intent, btSyncServiceConnection, Context.BIND_AUTO_CREATE)
         }
+        Intent(this, SensorTileService::class.java).also { intent ->
+            bindService(intent, sensorTileServiceConnection, Context.BIND_AUTO_CREATE)
+        }
 
         requestBluetoothPermissions()
         ExportUtils.cleanupOldZips(this)
@@ -103,6 +123,7 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.padding(innerPadding),
                         sensorService = sensorService,
                         btSyncService = btSyncService,
+                        sensorTileService = sensorTileService,
                         isSensorServiceBound = isSensorServiceBound.value
                     )
                 }
@@ -141,6 +162,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         if (isSensorServiceBound.value) unbindService(sensorServiceConnection)
         if (isBtSyncServiceBound.value) unbindService(btSyncServiceConnection)
+        if (isSensorTileServiceBound.value) unbindService(sensorTileServiceConnection)
     }
 }
 
@@ -151,6 +173,7 @@ fun RecorderScreen(
     modifier: Modifier = Modifier,
     sensorService: SensorRecorderService?,
     btSyncService: BluetoothSyncService?,
+    sensorTileService: SensorTileService?,
     isSensorServiceBound: Boolean
 ) {
     val context = LocalContext.current
@@ -179,6 +202,10 @@ fun RecorderScreen(
     var connectedPeerAddresses by remember { mutableStateOf<Set<String>>(emptySet()) }
     // Lets user open the device picker from RecordingScreen to add a 2nd device
     var showAddDeviceOverride by remember { mutableStateOf(false) }
+
+    // ── SensorTile state ─────────────────────────────────────────────────────
+    var sensorTileState by remember { mutableStateOf(SensorTileConnectionState.IDLE) }
+    var sensorTileError by remember { mutableStateOf<String?>(null) }
 
     // ── Countdown state ──────────────────────────────────────────────────────
     var startDelaySeconds by remember { mutableIntStateOf(0) }
@@ -220,6 +247,17 @@ fun RecorderScreen(
                 syncReport = svc.lastSyncReport
                 errorMessage = svc.errorMessage
                 connectedPeerAddresses = svc.connectedPeerAddresses
+            }
+            delay(200)
+        }
+    }
+
+    // ── Poll SensorTile service ──────────────────────────────────────────────
+    LaunchedEffect(sensorTileService) {
+        while (true) {
+            sensorTileService?.let { svc ->
+                sensorTileState = svc.connectionState
+                sensorTileError = svc.errorMessage
             }
             delay(200)
         }
@@ -289,6 +327,7 @@ fun RecorderScreen(
             if (!isRecording) {
                 if (deviceRole == DeviceRole.CONTROLLER) {
                     btSyncService?.sendCommand("CMD_START")
+                    sensorTileService?.startLog()
                 }
                 sensorService?.startRecording()
             }
@@ -424,12 +463,15 @@ fun RecorderScreen(
                     isCountingDown = isCountingDown,
                     countdownValue = countdownValue,
                     startDelaySeconds = startDelaySeconds,
+                    sensorTileState = sensorTileState,
+                    sensorTileError = sensorTileError,
                     onRoleSelected = onRoleSelected,
                     onStartDelayChange = { startDelaySeconds = it },
                     onRecordToggle = {
                         if (isRecording) {
                             btSyncService?.sendCommand("CMD_STOP")
                             sensorService?.stopRecording()
+                            sensorTileService?.stopLog()
                         } else {
                             if (startDelaySeconds > 0) {
                                 isCountingDown = true
@@ -437,6 +479,7 @@ fun RecorderScreen(
                             } else {
                                 btSyncService?.sendCommand("CMD_START")
                                 sensorService?.startRecording()
+                                sensorTileService?.startLog()
                             }
                         }
                     },
@@ -451,7 +494,19 @@ fun RecorderScreen(
                             context.startService(it)
                         }
                     },
-                    onAddDevice = { showAddDeviceOverride = true }
+                    onAddDevice = { showAddDeviceOverride = true },
+                    onConnectSensorTile = {
+                        Intent(context, SensorTileService::class.java).also {
+                            it.action = SensorTileService.ACTION_SCAN
+                            context.startForegroundService(it)
+                        }
+                    },
+                    onDisconnectSensorTile = {
+                        Intent(context, SensorTileService::class.java).also {
+                            it.action = SensorTileService.ACTION_DISCONNECT
+                            context.startService(it)
+                        }
+                    }
                 )
             }
             state.role == DeviceRole.WORKER && !state.isRecording && state.btState in listOf(BtConnectionState.IDLE, BtConnectionState.CONNECTING, BtConnectionState.SYNCING) -> {
@@ -807,13 +862,17 @@ fun RecordingScreen(
     isCountingDown: Boolean,
     countdownValue: Int,
     startDelaySeconds: Int,
+    sensorTileState: SensorTileConnectionState = SensorTileConnectionState.IDLE,
+    sensorTileError: String? = null,
     onRoleSelected: (DeviceRole) -> Unit,
     onStartDelayChange: (Int) -> Unit,
     onRecordToggle: () -> Unit,
     onSyncTap: () -> Unit,
     onExportToggle: (Boolean) -> Unit,
     onSyncClocks: (() -> Unit)? = null,
-    onAddDevice: (() -> Unit)? = null
+    onAddDevice: (() -> Unit)? = null,
+    onConnectSensorTile: (() -> Unit)? = null,
+    onDisconnectSensorTile: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     Column(modifier = Modifier.fillMaxSize()) {
@@ -868,6 +927,17 @@ fun RecordingScreen(
                 peerDeviceName = peerDeviceName,
                 onSyncClocks = onSyncClocks,
                 onAddDevice = if (!isRecording && !isCountingDown) onAddDevice else null
+            )
+        }
+
+        // SensorTile status card (Controller only)
+        if (deviceRole == DeviceRole.CONTROLLER) {
+            SensorTileCard(
+                state = sensorTileState,
+                errorMessage = sensorTileError,
+                isRecording = isRecording,
+                onConnect = onConnectSensorTile,
+                onDisconnect = onDisconnectSensorTile
             )
         }
 
@@ -1094,5 +1164,70 @@ fun StatItem(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(label, style = MaterialTheme.typography.labelMedium)
         Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+fun SensorTileCard(
+    state: SensorTileConnectionState,
+    errorMessage: String?,
+    isRecording: Boolean,
+    onConnect: (() -> Unit)?,
+    onDisconnect: (() -> Unit)?
+) {
+    val statusText = when (state) {
+        SensorTileConnectionState.IDLE        -> "○ Not connected"
+        SensorTileConnectionState.SCANNING    -> "⟳ Scanning..."
+        SensorTileConnectionState.CONNECTING  -> "⟳ Connecting..."
+        SensorTileConnectionState.CONFIGURING -> "⟳ Configuring..."
+        SensorTileConnectionState.READY       -> "● Ready"
+        SensorTileConnectionState.RECORDING   -> "● Recording"
+        SensorTileConnectionState.ERROR       -> "✕ Error"
+    }
+    val isConnected = state in listOf(
+        SensorTileConnectionState.READY,
+        SensorTileConnectionState.RECORDING,
+        SensorTileConnectionState.CONFIGURING
+    )
+    val isBusy = state in listOf(
+        SensorTileConnectionState.SCANNING,
+        SensorTileConnectionState.CONNECTING,
+        SensorTileConnectionState.CONFIGURING
+    )
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("SensorTile.box PRO", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(statusText, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                if (isBusy) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                }
+            }
+            if (state == SensorTileConnectionState.ERROR && errorMessage != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            if (!isRecording) {
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!isConnected && !isBusy) {
+                        Button(onClick = { onConnect?.invoke() }) {
+                            Text("Connect SensorTile")
+                        }
+                    }
+                    if (isConnected || isBusy || state == SensorTileConnectionState.ERROR) {
+                        OutlinedButton(onClick = { onDisconnect?.invoke() }) {
+                            Text("Disconnect")
+                        }
+                    }
+                }
+            }
+        }
     }
 }
