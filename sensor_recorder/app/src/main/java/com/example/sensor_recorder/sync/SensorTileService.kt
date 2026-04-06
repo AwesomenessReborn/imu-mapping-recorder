@@ -52,8 +52,8 @@ class SensorTileService : Service() {
         // VERIFY: if connectionState goes to ERROR after service discovery, enable Timber
         // logging and grep for "SERVICE:" and "CHAR:" lines — they list every UUID the
         // device advertises. Or use nRF Connect to scan "SensorTile.box Pro" manually.
-        private val PNPL_SERVICE_UUID    = UUID.fromString("00000000-0001-11e1-9ab4-0002a5d5c51b")
-        private val PNPL_WRITE_CHAR_UUID = UUID.fromString("00000002-0001-11e1-ac8b-0002a5d5c51b")
+        private val PNPL_SERVICE_UUID    = UUID.fromString("00000000-000e-11e1-9ab4-0002a5d5c51b")
+        private val PNPL_WRITE_CHAR_UUID = UUID.fromString("00000001-000e-11e1-ac36-0002a5d5c51b")
 
         // Known BLE advertisement names for SensorTile.box PRO running DATALOG2.
         // The STBLESensors app shows it as "HSD2v32"; the firmware may also advertise
