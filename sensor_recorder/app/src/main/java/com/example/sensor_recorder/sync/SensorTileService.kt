@@ -249,8 +249,8 @@ class SensorTileService : Service() {
 
     /** Send PnPL stop_log command. No-op if not recording. */
     fun stopLog() {
-        if (connectionState != SensorTileConnectionState.RECORDING) {
-            Timber.w("stopLog() called but state=$connectionState — ignoring")
+        if (pnplChar == null) {
+            Timber.w("stopLog() called but not connected — ignoring")
             return
         }
         sendPnpl("""{"log_controller":{"stop_log":{}}}""")
