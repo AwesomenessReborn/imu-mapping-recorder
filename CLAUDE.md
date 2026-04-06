@@ -4,9 +4,98 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-General-purpose Android app for high-frequency IMU (accelerometer + gyroscope) data recording at ~200Hz. Supports synchronized recording across multiple Android phones via Bluetooth Classic. Built to overcome limitations of third-party tools that cannot sustain high sampling rates on modern Android devices.
+Hardcoded research recorder for a specific IMU mapping experiment. Records accelerometer and gyroscope data from two Android phones and a SensorTile.box PRO simultaneously, then aligns the signals in post-processing to build a mapping function that correlates IMU data from one body location to another.
 
-**Scope:** Android phones only. No external hardware IMU support. For the research variant that adds a SensorTile.box PRO as a third device, see [imu-mapping-recorder](https://github.com/AwesomenessReborn/imu-mapping-recorder).
+**This is not a general-purpose tool.** Hardware is fixed. Do not add generalization, configuration options, or support for other devices.
+
+**Downstream goal:** An inference engine consumes aligned multi-device IMU data at 208Hz to perform location-to-location IMU signal mapping (e.g., wrist → ankle).
+
+**Related repo:** [sensor-data-recorder](https://github.com/AwesomenessReborn/sensor-data-recorder) — the general-purpose multi-Android variant this project was forked from.
+
+---
+
+## Hardware (hardcoded — do not generalize)
+
+| Device | Role | IMU | Notes |
+|---|---|---|---|
+| **Pixel 8** | Controller (Phone A) | STMicro LSM6DSO | Initiates BT sync, triggers start/stop |
+| **Pixel 8a** | Worker (Phone B) | STMicro LSM6DSO | Receives commands from Controller |
+| **SensorTile.box PRO** (STEVAL-MKBOXPRO) | Peripheral | LSM6DSV16X @ 480Hz | DATALOG2 v3.2.0 firmware, logs to SD card |
+
+---
+
+## Experiment Recording Workflow
+
+This is the required procedure for every data collection session:
+
+### Before First Use
+1. Flash SensorTile with DATALOG2 v3.2.0 firmware (one-time, see Firmware section below)
+2. Pair Phone A and Phone B in Android Bluetooth Settings
+
+### Per-Session Procedure
+1. **Set roles:** Open app on Phone A → set role **CONTROLLER**. Open app on Phone B → set role **WORKER**.
+2. **Connect phones:** On Phone A, tap "Select Device" → pick Phone B. App runs 10-round clock sync automatically (~1 second). Expected accuracy: ±1–5ms.
+3. **[Future] Connect SensorTile:** Phone A connects to SensorTile via BLE → sends PnPL config (480Hz, LSM6DSV16X accel + gyro, all others disabled).
+4. **Sync tap:** Sharp table tap — visible on all IMU streams simultaneously. This is the pre-recording alignment anchor.
+5. **Start recording:** Press START on Phone A (Controller). Phone B starts simultaneously. SensorTile starts SD card log (via PnPL `start_log` command over BLE, or manually via MEMS Studio until BLE control is implemented).
+6. **Record:** Sessions ≤10 minutes (crystal drift limit: ~40–50ms raw, corrected to <3ms with tap anchors at both ends).
+7. **Sync tap at end:** Another sharp table tap before stopping.
+8. **Stop:** Press STOP on Phone A. Coordinated stop on both phones. Send PnPL `stop_log` to SensorTile.
+9. **Export:**
+   - Phone A: Share Recording → ZIP (Accelerometer.csv, Gyroscope.csv, Annotation.csv, Metadata.json)
+   - Phone B: Share Recording → ZIP (same format)
+   - SensorTile: Eject SD card, copy DATALOG2 output files
+10. **Run alignment pipeline:** See `gait-research/projects/imu-mapping/align_and_verify.py`
+    - Phone A ↔ Phone B: already aligned via `bt_clock_offsets` in Metadata.json
+    - SensorTile ↔ Phone A: tap cross-correlation on acceleration magnitude (rotation-invariant)
+
+---
+
+## Clock Alignment Strategy
+
+| Pair | Method | Expected Accuracy |
+|---|---|---|
+| Phone A ↔ Phone B | BT NTP ping-pong (10 rounds, `ClockOffsetEstimator`) | ±1–5ms |
+| SensorTile ↔ Phone A | Post-hoc tap cross-correlation on accel magnitude | <3ms after linear drift correction |
+
+SensorTile timestamps are reconstructed from sample index × ODR period, anchored to the `start_log` ACK time. Drift is bounded by ±10-minute segment limit and corrected linearly between the two tap anchors.
+
+---
+
+## Implementation Status
+
+| Feature | Status | Location |
+|---|---|---|
+| Phone IMU recording @ SENSOR_DELAY_FASTEST (~200Hz) | ✅ Done | `SensorRecorderService.kt` |
+| Multi-device BT Classic sync (RFCOMM, Controller/Worker) | ✅ Done | `sync/BluetoothSyncService.kt` |
+| Clock sync protocol (ping-pong, 10 rounds) | ✅ Done | `sync/ClockOffsetEstimator.kt` |
+| Coordinated start/stop (CMD_START / CMD_STOP + ACK) | ✅ Done | `sync/BluetoothSyncService.kt` |
+| Export via Android share sheet (ZIP) | ✅ Done | `ExportUtils.kt` |
+| SensorTileService — BLE connect + PnPL start/stop | 🔜 Next | `docs/plan-sensortile-ble.md` (Phase 1–3) |
+| SD card fetch + alignment pipeline | 🔜 Separate | `gait-research/projects/imu-mapping/` |
+
+---
+
+## SensorTile Firmware
+
+- **Board:** STEVAL-MKBOXPRO (SensorTile.box PRO)
+- **Firmware:** FP-SNS-DATALOG2 v3.2.0
+- **Config:** LSM6DSV16X accel + gyro only, ODR 480Hz, all other sensors disabled
+
+**Flashing (CLI — MEMS Studio GUI has file-picker issue on macOS):**
+```bash
+/Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/Resources/bin/STM32_Programmer_CLI \
+  -c port=USB1 \
+  -w "<path_to>/DATALOG2_Release.bin" \
+  0x08000000 -v -rst
+```
+Binary location after unzip:
+```
+fp-sns-datalog2/STM32CubeFunctionPack_DATALOG2_V3.2.0/Projects/STM32U585AI-SensorTile.boxPro/Applications/DATALOG2/Binary/DATALOG2_Release.bin
+```
+The `-rst` error at the end is expected (DFU limitation) — unplug and replug manually.
+
+---
 
 ## Build and Run
 
@@ -18,51 +107,42 @@ cd sensor_recorder
 # Build debug APK
 ./gradlew assembleDebug
 
-# Build release APK
-./gradlew assembleRelease
-
 # Install to connected device
 ./gradlew installDebug
 
 # Clean build
 ./gradlew clean
-
-# Run tests
-./gradlew test
-./gradlew connectedAndroidTest
 ```
+
+---
 
 ## Architecture
 
 ### Core Components
 
 **SensorRecorderService** (`SensorRecorderService.kt`):
-- Foreground service that handles sensor data collection at SENSOR_DELAY_FASTEST
-- Buffers samples in memory using `ConcurrentLinkedQueue` and flushes to disk every 1 second (disk I/O at 200Hz would drop samples)
-- Maintains wake lock during recording to prevent sleep
-- Tracks sampling rates using a circular buffer of inter-sample intervals
-- Records epoch offset once at start: `System.currentTimeMillis() * 1e6 - SystemClock.elapsedRealtimeNanos()`
-- Generates three output files: `Accelerometer.csv`, `Gyroscope.csv`, `Annotation.csv` plus `Metadata.json`
+- Foreground service, phone IMU recording at SENSOR_DELAY_FASTEST
+- Buffers in `ConcurrentLinkedQueue`, flushes to disk every 1 second
+- Maintains wake lock; tracks Hz via circular buffer of last 50 inter-sample intervals
+- Records epoch offset: `System.currentTimeMillis() * 1e6 - SystemClock.elapsedRealtimeNanos()`
+- Outputs: `Accelerometer.csv`, `Gyroscope.csv`, `Annotation.csv`, `Metadata.json`
+
+**BluetoothSyncService** (`sync/BluetoothSyncService.kt`):
+- Foreground service, RFCOMM over Bluetooth Classic
+- Controller: connects to Workers, runs clock sync, sends CMD_START / CMD_STOP
+- Worker: listens, auto-relistens on disconnect; ACKs commands, calls SensorRecorderService
+- State machine: IDLE → CONNECTING → SYNCING → READY → RECORDING
+
+**SensorTileService** (`sync/SensorTileService.kt`) — *not yet implemented:*
+- BLE GATT client for SensorTile.box PRO
+- Sends PnPL JSON commands (configure sensors, start/stop log)
+- See `docs/plan-sensortile-ble.md` for the full 7-phase implementation plan
 
 **MainActivity** (`MainActivity.kt`):
-- Jetpack Compose UI that binds to `SensorRecorderService`
-- Polls service every 100ms for live stats display
-- Handles start/stop recording, sync tap markers, and export sharing
-- Requests POST_NOTIFICATIONS permission for Android 13+
+- Compose UI, binds to all services, polls state every 100ms
 
 **ExportUtils** (`ExportUtils.kt`):
-- Creates ZIP archives of recording sessions
-- Uses FileProvider to share recordings via Android share sheet
-- Cleans up old ZIPs from cache on app start
-
-### Data Flow
-
-1. User starts recording → MainActivity sends intent to SensorRecorderService
-2. Service registers `SensorEventListener` at `SENSOR_DELAY_FASTEST`
-3. `onSensorChanged()` adds CSV lines to in-memory queues (not directly to disk)
-4. Background coroutine flushes queues to CSV files every 1 second
-5. On stop, final flush writes remaining data + metadata JSON
-6. User exports via share sheet → ExportUtils creates ZIP and invokes Android share
+- Creates ZIP, shares via Android share sheet, cleans old ZIPs on start
 
 ### Output Format
 
@@ -72,35 +152,27 @@ timestamp_ns,x,y,z
 783012345678900,0.0234,-9.7891,0.1456
 ```
 
-**Metadata** (`Metadata.json`):
+**Metadata.json:**
 ```json
-{"recording_start_epoch_ms": 1234567890123, "epoch_offset_ns": 456789012345678, "accel_sample_count": 12000, "gyro_sample_count": 12000}
+{
+  "recording_start_epoch_ms": 1234567890123,
+  "epoch_offset_ns": 456789012345678,
+  "accel_sample_count": 12000,
+  "gyro_sample_count": 12000,
+  "bt_clock_offsets": {
+    "Pixel 8a": {"offset_ns": 123456, "std_dev_ns": 4321, "sample_count": 10}
+  }
+}
 ```
 
-The `timestamp_ns` field uses `event.timestamp` (nanoseconds since boot, monotonic clock) to avoid NTP jitter. The `epoch_offset_ns` enables wall-clock alignment across devices in post-processing.
-
-## Key Technical Decisions
-
-- **Buffer-and-flush pattern**: Writing every sample directly to disk causes dropped samples. The 1-second flush interval balances data loss risk with I/O overhead.
-- **Circular buffer for rate tracking**: Last 50 inter-sample intervals provide stable real-time Hz calculations without accumulating unbounded history.
-- **Monotonic timestamps**: `event.timestamp` is immune to wall-clock adjustments, making it suitable for signal processing. Epoch offset recorded once at start maps boot time to wall time.
-- **Foreground service**: Required for screen-off recording on Android 10+. Uses `dataSync` service type with persistent notification.
+---
 
 ## Requirements
 
 - Min SDK 29 (Android 10)
 - Target SDK 36 (Android 15)
-- Permissions: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS`, `HIGH_SAMPLING_RATE_SENSORS`, `WAKE_LOCK`
+- Permissions: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `FOREGROUND_SERVICE_CONNECTED_DEVICE`, `POST_NOTIFICATIONS`, `HIGH_SAMPLING_RATE_SENSORS`, `WAKE_LOCK`, `BLUETOOTH_CONNECT`, `BLUETOOTH_SCAN`
 
-## Multi-Device Bluetooth Sync
+## Docs
 
-**BluetoothSyncService** (`sync/BluetoothSyncService.kt`):
-- Foreground service using Bluetooth Classic RFCOMM for multi-phone coordination
-- Roles: `CONTROLLER` (initiates, up to 3 peers) and `WORKER` (listens, auto-relistens on disconnect)
-- Clock sync: 10 ping-pong rounds via `ClockOffsetEstimator`, outliers discarded, result stored in `Metadata.json` as `bt_clock_offsets`
-- Recording coordination: `CMD_START` / `CMD_STOP` with ACK, state machine: IDLE → CONNECTING → SYNCING → READY → RECORDING
-- `SyncMessage` sealed class: JSON-serialized Ping, Pong, Command, Ack, Status, SyncDone
-
-## Related Projects
-
-- **imu-mapping-recorder** — hardcoded research fork: 2 phones + SensorTile.box PRO, tap-based post-hoc alignment, 208Hz inference pipeline. See [github.com/AwesomenessReborn/imu-mapping-recorder](https://github.com/AwesomenessReborn/imu-mapping-recorder)
+- `docs/plan-sensortile-ble.md` — 7-phase SensorTile BLE integration design (next implementation target)
