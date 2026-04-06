@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Android app for high-frequency IMU (accelerometer + gyroscope) data recording at ~200Hz. Built to overcome limitations of third-party tools that cannot sustain high sampling rates on modern Android devices. Designed for multi-device recording scenarios with synchronization capabilities.
+General-purpose Android app for high-frequency IMU (accelerometer + gyroscope) data recording at ~200Hz. Supports synchronized recording across multiple Android phones via Bluetooth Classic. Built to overcome limitations of third-party tools that cannot sustain high sampling rates on modern Android devices.
+
+**Scope:** Android phones only. No external hardware IMU support. For the research variant that adds a SensorTile.box PRO as a third device, see [imu-mapping-recorder](https://github.com/AwesomenessReborn/imu-mapping-recorder).
 
 ## Build and Run
 
@@ -90,7 +92,15 @@ The `timestamp_ns` field uses `event.timestamp` (nanoseconds since boot, monoton
 - Target SDK 36 (Android 15)
 - Permissions: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS`, `HIGH_SAMPLING_RATE_SENSORS`, `WAKE_LOCK`
 
-## Docs
+## Multi-Device Bluetooth Sync
 
-- `docs/issues/` — known bugs, debug notes, Bluetooth error log
-- `docs/plans/` — implementation plans for dev agents (multi-device, UI flow)
+**BluetoothSyncService** (`sync/BluetoothSyncService.kt`):
+- Foreground service using Bluetooth Classic RFCOMM for multi-phone coordination
+- Roles: `CONTROLLER` (initiates, up to 3 peers) and `WORKER` (listens, auto-relistens on disconnect)
+- Clock sync: 10 ping-pong rounds via `ClockOffsetEstimator`, outliers discarded, result stored in `Metadata.json` as `bt_clock_offsets`
+- Recording coordination: `CMD_START` / `CMD_STOP` with ACK, state machine: IDLE → CONNECTING → SYNCING → READY → RECORDING
+- `SyncMessage` sealed class: JSON-serialized Ping, Pong, Command, Ack, Status, SyncDone
+
+## Related Projects
+
+- **imu-mapping-recorder** — hardcoded research fork: 2 phones + SensorTile.box PRO, tap-based post-hoc alignment, 208Hz inference pipeline. See [github.com/AwesomenessReborn/imu-mapping-recorder](https://github.com/AwesomenessReborn/imu-mapping-recorder)

@@ -1,8 +1,10 @@
 # IMU Data Recorder for Android
 
+> **Research fork:** For the variant that adds a SensorTile.box PRO as a third IMU device (2 phones + SensorTile, tap-based post-hoc alignment, 208Hz inference pipeline), see [imu-mapping-recorder](https://github.com/AwesomenessReborn/imu-mapping-recorder).
+
 ## Purpose
 
-A minimal Android app to record high-frequency IMU data (accelerometer + gyroscope) from Android devices at **~200 Hz** (or max supported rate) and export to CSV. This app was built to overcome limitations in existing tools that could not reliably sustain high sampling rates on modern Android devices.
+A general-purpose Android app to record high-frequency IMU data (accelerometer + gyroscope) from **multiple Android phones** simultaneously at **~200 Hz** and export to CSV. Uses Bluetooth Classic for sub-5ms clock synchronization and coordinated start/stop across devices. Built to overcome limitations in existing tools that could not reliably sustain high sampling rates on modern Android devices.
 
 ## Features
 
