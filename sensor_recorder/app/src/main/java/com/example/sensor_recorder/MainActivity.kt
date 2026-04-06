@@ -1184,12 +1184,7 @@ fun SensorTileCard(
         SensorTileConnectionState.RECORDING   -> "● Recording"
         SensorTileConnectionState.ERROR       -> "✕ Error"
     }
-    val isConnected = state in listOf(
-        SensorTileConnectionState.READY,
-        SensorTileConnectionState.RECORDING,
-        SensorTileConnectionState.CONFIGURING
-    )
-    val isBusy = state in listOf(
+    val isSearching = state in listOf(
         SensorTileConnectionState.SCANNING,
         SensorTileConnectionState.CONNECTING,
         SensorTileConnectionState.CONFIGURING
@@ -1201,7 +1196,7 @@ fun SensorTileCard(
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(statusText, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                if (isBusy) {
+                if (isSearching) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                 }
             }
@@ -1215,13 +1210,22 @@ fun SensorTileCard(
             }
             if (!isRecording) {
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (!isConnected && !isBusy) {
+                when (state) {
+                    SensorTileConnectionState.IDLE,
+                    SensorTileConnectionState.ERROR -> {
                         Button(onClick = { onConnect?.invoke() }) {
-                            Text("Connect SensorTile")
+                            Text(if (state == SensorTileConnectionState.ERROR) "Retry" else "Connect SensorTile")
                         }
                     }
-                    if (isConnected || isBusy || state == SensorTileConnectionState.ERROR) {
+                    SensorTileConnectionState.SCANNING,
+                    SensorTileConnectionState.CONNECTING,
+                    SensorTileConnectionState.CONFIGURING -> {
+                        OutlinedButton(onClick = { onDisconnect?.invoke() }) {
+                            Text("Cancel")
+                        }
+                    }
+                    SensorTileConnectionState.READY,
+                    SensorTileConnectionState.RECORDING -> {
                         OutlinedButton(onClick = { onDisconnect?.invoke() }) {
                             Text("Disconnect")
                         }
