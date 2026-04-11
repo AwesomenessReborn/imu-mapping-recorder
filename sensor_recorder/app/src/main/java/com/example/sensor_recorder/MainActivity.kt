@@ -40,7 +40,7 @@ import com.example.sensor_recorder.sync.DeviceRole
 import com.example.sensor_recorder.sync.SensorTileConnectionState
 import com.example.sensor_recorder.sync.SensorTileService
 import com.example.sensor_recorder.sync.SyncReport
-import com.example.sensor_recorder.ui.theme.Sensor_recorderTheme
+import com.example.sensor_recorder.ui.theme.SensorRecorderTheme
 import kotlinx.coroutines.delay
 import timber.log.Timber
 import java.io.File
@@ -117,7 +117,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            Sensor_recorderTheme {
+            SensorRecorderTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     RecorderScreen(
                         modifier = Modifier.padding(innerPadding),
@@ -200,8 +200,6 @@ fun RecorderScreen(
     var syncReport by remember { mutableStateOf<SyncReport?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var connectedPeerAddresses by remember { mutableStateOf<Set<String>>(emptySet()) }
-    // Lets user open the device picker from RecordingScreen to add a 2nd device
-    var showAddDeviceOverride by remember { mutableStateOf(false) }
 
     // ── SensorTile state ─────────────────────────────────────────────────────
     var sensorTileState by remember { mutableStateOf(SensorTileConnectionState.IDLE) }
@@ -360,13 +358,12 @@ fun RecorderScreen(
 
     // ── Determine which screen to show ───────────────────────────────────────
     val showDevicePicker = deviceRole == DeviceRole.CONTROLLER &&
-        (btState in listOf(BtConnectionState.IDLE, BtConnectionState.ERROR) || showAddDeviceOverride)
+        (btState in listOf(BtConnectionState.IDLE, BtConnectionState.ERROR))
     val showConnecting = !showDevicePicker &&
         deviceRole == DeviceRole.CONTROLLER &&
         btState in listOf(BtConnectionState.CONNECTING, BtConnectionState.SYNCING)
 
     val connectDeviceAction: (BluetoothDevice) -> Unit = { device ->
-        showAddDeviceOverride = false
         val intent = Intent(context, BluetoothSyncService::class.java).apply {
             action = BluetoothSyncService.ACTION_CONNECT
             putExtra(BluetoothSyncService.EXTRA_DEVICE_ADDRESS, device.address)
@@ -408,7 +405,8 @@ fun RecorderScreen(
                         }
                     },
                     onSyncTap = { sensorService?.logSyncTap() },
-                    onExportToggle = { isExporting = it }
+                    onExportToggle = { isExporting = it },
+                    errorMessage = errorMessage
                 )
             }
             showDevicePicker -> {
@@ -417,7 +415,7 @@ fun RecorderScreen(
                     onRoleSelected = onRoleSelected,
                     errorMessage = if (state.btState == BtConnectionState.ERROR) errorMessage else null,
                     connectedPeerAddresses = connectedPeerAddresses,
-                    isAddingDevice = showAddDeviceOverride,
+                    isAddingDevice = false,
                     isBluetoothEnabled = isBluetoothEnabled,
                     isScanning = isScanning,
                     scannedDevices = scannedDevices,
@@ -429,7 +427,7 @@ fun RecorderScreen(
                             Timber.e(e, "No permission to start discovery")
                         }
                     },
-                    onBack = if (showAddDeviceOverride) {{ showAddDeviceOverride = false }} else null,
+                    onBack = null,
                     onDeviceSelected = connectDeviceAction
                 )
             }
@@ -438,7 +436,6 @@ fun RecorderScreen(
                     state = state.btState,
                     peerDeviceName = peerDeviceName,
                     onCancel = {
-                        showAddDeviceOverride = false
                         Intent(context, BluetoothSyncService::class.java).also {
                             it.action = BluetoothSyncService.ACTION_DISCONNECT
                             context.startService(it)
@@ -494,7 +491,7 @@ fun RecorderScreen(
                             context.startService(it)
                         }
                     },
-                    onAddDevice = { showAddDeviceOverride = true },
+                    errorMessage = errorMessage,
                     onConnectSensorTile = {
                         Intent(context, SensorTileService::class.java).also {
                             it.action = SensorTileService.ACTION_SCAN
@@ -542,7 +539,8 @@ fun RecorderScreen(
                         }
                     },
                     onSyncTap = { sensorService?.logSyncTap() },
-                    onExportToggle = { isExporting = it }
+                    onExportToggle = { isExporting = it },
+                    errorMessage = errorMessage
                 )
             }
         }
@@ -618,11 +616,8 @@ fun DevicePickerScreen(
 
         Spacer(Modifier.height(16.dp))
 
-        // Only show role selector when not in "add device" overlay mode
-        if (!isAddingDevice) {
-            DeviceRoleSelector(selectedRole = deviceRole, onRoleSelected = onRoleSelected)
-            Spacer(Modifier.height(16.dp))
-        }
+        DeviceRoleSelector(selectedRole = deviceRole, onRoleSelected = onRoleSelected)
+        Spacer(Modifier.height(16.dp))
 
         if (errorMessage != null) {
             Card(
@@ -650,7 +645,7 @@ fun DevicePickerScreen(
             Spacer(Modifier.height(16.dp))
         }
 
-        val title = if (isAddingDevice) "Add another worker device" else "Select worker device"
+        val title = "Select worker device"
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -862,6 +857,7 @@ fun RecordingScreen(
     isCountingDown: Boolean,
     countdownValue: Int,
     startDelaySeconds: Int,
+    errorMessage: String? = null,
     sensorTileState: SensorTileConnectionState = SensorTileConnectionState.IDLE,
     sensorTileError: String? = null,
     onRoleSelected: (DeviceRole) -> Unit,
@@ -870,7 +866,6 @@ fun RecordingScreen(
     onSyncTap: () -> Unit,
     onExportToggle: (Boolean) -> Unit,
     onSyncClocks: (() -> Unit)? = null,
-    onAddDevice: (() -> Unit)? = null,
     onConnectSensorTile: (() -> Unit)? = null,
     onDisconnectSensorTile: (() -> Unit)? = null
 ) {
@@ -904,10 +899,19 @@ fun RecordingScreen(
             )
         ) {
             Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                val statusText = when {
+                    isRecording -> "● RECORDING"
+                    isCountingDown -> "COUNTING DOWN"
+                    isExporting -> "EXPORTING..."
+                    deviceRole != DeviceRole.STANDALONE && btState == BtConnectionState.ERROR -> "SYNC ERROR"
+                    deviceRole != DeviceRole.STANDALONE && btState != BtConnectionState.READY -> "WAITING FOR SYNC"
+                    else -> "READY"
+                }
                 Text(
-                    text = if (isRecording) "● RECORDING" else "READY",
+                    text = statusText,
                     style = MaterialTheme.typography.titleLarge,
                     color = if (isRecording) MaterialTheme.colorScheme.onErrorContainer
+                    else if (btState == BtConnectionState.ERROR) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.Bold
                 )
@@ -925,8 +929,8 @@ fun RecordingScreen(
                 role = deviceRole,
                 state = btState,
                 peerDeviceName = peerDeviceName,
-                onSyncClocks = onSyncClocks,
-                onAddDevice = if (!isRecording && !isCountingDown) onAddDevice else null
+                errorMessage = errorMessage,
+                onSyncClocks = onSyncClocks
             )
         }
 
@@ -1079,8 +1083,8 @@ fun BluetoothStatusCard(
     role: DeviceRole,
     state: BtConnectionState,
     peerDeviceName: String?,
-    onSyncClocks: (() -> Unit)? = null,
-    onAddDevice: (() -> Unit)? = null
+    errorMessage: String? = null,
+    onSyncClocks: (() -> Unit)? = null
 ) {
     val statusText = when (state) {
         BtConnectionState.IDLE -> if (role == DeviceRole.WORKER) "● Listening..." else "○ Not connected"
@@ -1101,6 +1105,10 @@ fun BluetoothStatusCard(
             Text("Bluetooth Sync", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
             Text(statusText, style = MaterialTheme.typography.bodyLarge)
+            if (state == BtConnectionState.ERROR && errorMessage != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(errorMessage, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            }
             if (showPeerList) {
                 Spacer(Modifier.height(4.dp))
                 peerNames.forEach { name ->
@@ -1110,11 +1118,6 @@ fun BluetoothStatusCard(
             if (role == DeviceRole.CONTROLLER) {
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (onAddDevice != null) {
-                        Button(onClick = onAddDevice) {
-                            Text("Add Device")
-                        }
-                    }
                     if (onSyncClocks != null) {
                         OutlinedButton(
                             onClick = onSyncClocks,
