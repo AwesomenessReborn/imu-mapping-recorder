@@ -19,10 +19,10 @@ The project is a modern Android application built using **Kotlin**, **Jetpack Co
 - **`ExportUtils.kt`**: Utility for packaging recording sessions (CSVs and Metadata) into ZIP files and sharing them via the Android share sheet.
 
 ## Building and Running
-All build commands should be executed from the `sensor_recorder/` directory:
+All build commands should be executed from the `imu_mapping_recorder/` directory:
 
 ```bash
-cd sensor_recorder
+cd imu_mapping_recorder
 
 # Build the debug APK
 ./gradlew assembleDebug

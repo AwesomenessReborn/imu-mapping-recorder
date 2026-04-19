@@ -140,7 +140,7 @@ All messages are newline-delimited JSON strings sent over a `BluetoothSocket` RF
 ### New files
 
 ```
-sensor_recorder/app/src/main/java/com/example/sensor_recorder/
+imu_mapping_recorder/app/src/main/java/com/example/imu_mapping_recorder/
 └── sync/
     ├── DeviceRole.kt            // enum: STANDALONE, CONTROLLER, WORKER
     ├── SyncMessage.kt           // data classes + JSON serialization for all message types

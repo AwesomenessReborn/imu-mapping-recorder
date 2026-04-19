@@ -1,7 +1,7 @@
 # Plan: UI Screen Flow Restructure
 
 **Branch:** `feature/bluetooth-sync`
-**File to modify:** `sensor_recorder/app/src/main/java/com/example/sensor_recorder/MainActivity.kt`
+**File to modify:** `imu_mapping_recorder/app/src/main/java/com/example/imu_mapping_recorder/MainActivity.kt`
 **No new files needed** — all changes are within MainActivity.kt (the app is 100% Jetpack Compose, single-file UI).
 
 ---

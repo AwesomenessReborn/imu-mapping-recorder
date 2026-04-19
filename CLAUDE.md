@@ -141,10 +141,10 @@ The `-rst` error at the end is expected (DFU limitation) — unplug and replug m
 
 ## Build and Run
 
-The project uses Gradle with Kotlin DSL. All commands run from the `sensor_recorder/` directory:
+The project uses Gradle with Kotlin DSL. All commands run from the `imu_mapping_recorder/` directory:
 
 ```bash
-cd sensor_recorder
+cd imu_mapping_recorder
 
 # Build debug APK
 ./gradlew assembleDebug
